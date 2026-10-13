@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.json">
+<title>حاسبة البعد الكيلومترى للمصارف</title>
+
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/@turf/turf@7/turf.min.js"></script>
+
+<style>
+*{margin:0;padding:0;box-sizing:border-box;font-family:Tahoma,Arial,sans-serif;}
+body{background:#0f172a;color:#fff;overflow:hidden;width:100vw;height:100vh;}
+header{height:50px;background:#111827;display:flex;align-items:center;justify-content:center;
+  font-size:17px;font-weight:bold;border-bottom:2px solid #1f2937;transition: all 0.2s ease;}
+
+/* الموبايل: الخريطة فوق والبيانات تحت */
+#container{display:flex;flex-direction:column;height:calc(100vh - 50px);position:relative;transition: all 0.3s ease;}
+
+#map-wrapper{position:relative;height:55vh;width:100%;transition: height 0.3s ease;}
+#map{height:100%;width:100%;}
+#sidebar{flex:1;background:#1e293b;padding:12px;overflow:auto;}
+
+/* حالات التحكم فى حجم الخريطة عبر الكلاسات */
+.map-small #map-wrapper { height: 25vh !important; }
+.map-fullscreen #map-wrapper { height: 100vh !important; }
+.map-fullscreen #sidebar { display: none !important; }
+.map-fullscreen header { display: none !important; }
+.map-fullscreen #container { height: 100vh !important; }
+
+/* الديسكتوب: جنب بعض */
+@media (min-width: 768px) {
+  #container{flex-direction:row;height:calc(100vh - 50px) !important;}
+  #map-wrapper{height:100% !important;flex:1;order:2;}
+  #sidebar{width:380px;order:1;height:100%;display:block !important;}
+  #resizeMapBtn{display:none !important;} /* إخفاء الزرار فى الشاشات الكبيرة */
+}
+
+.section{margin-bottom:14px;background:#172033;border:1px solid #283449;border-radius:10px;padding:10px;}
+.section h3{margin-bottom:8px;font-size:14px;color:#38bdf8;}
+input[type=file]{width:100%;padding:6px;background:#fff;border-radius:6px;color:#111;font-size:13px;}
+input[type=text], input[type=number]{width:100%;padding:8px;margin-top:6px;border:1px solid #334155;border-radius:6px;
+  font-size:14px;background:#0b1220;color:#fff;}
+input[type=text]::placeholder, input[type=number]::placeholder{color:#64748b;}
+button{width:100%;margin-top:10px;padding:10px;border:none;background:#2563eb;color:#fff;
+  font-size:15px;border-radius:8px;cursor:pointer;font-weight:bold;}
+button:hover{background:#1d4ed8;}
+button:disabled{background:#334155;cursor:not-allowed;}
+table{width:100%;border-collapse:collapse;}
+td{padding:6px 4px;border-bottom:1px solid #2b3852;font-size:13px;}
+.value{color:#22c55e;font-weight:bold;text-align:left;}
+#status{font-size:12px;color:#94a3b8;margin-top:6px;min-height:16px;}
+.legend{display:flex;gap:10px;margin-top:8px;font-size:11px;color:#cbd5e1;flex-wrap:wrap;}
+.legend span{display:inline-flex;align-items:center;gap:4px;}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;}
+
+#drainDropdown{position:relative;z-index:1000;}
+.drain-item{padding:8px;cursor:pointer;border-bottom:1px solid #283449;font-size:13px;color:#cbd5e1;}
+.drain-item:hover{background:#0b1220;}
+
+/* تعديل التموضع ليكون ثابتاً وفوق الجزء المرئي فعلياً من شاشتك (Viewport) */
+#resizeMapBtn {
+  position: fixed; 
+  bottom: calc(20px + env(safe-area-inset-bottom)); 
+  left: 20px; 
+  z-index: 99999; /* رفع درجة الطبقة لضمان ظهورها فوق كل شيء */
+  background: #1e293b; 
+  color: #fff; 
+  border: 2px solid #38bdf8;
+  border-radius: 50%; 
+  width: 50px; 
+  height: 50px; 
+  font-size: 24px;
+  display: flex; 
+  align-items: center; 
+  justify-content: center;
+  cursor: pointer; 
+  box-shadow: 0 4px 16px rgba(0,0,0,0.6); 
+  font-weight: bold;
+  -webkit-tap-highlight-color: transparent;
+}
+</style>
+</head>
+<body>
+
+<header id="app-header">حاسبة البعد الكيلومترى للمصارف</header>
+
+<button id="resizeMapBtn" title="تغيير حجم الخريطة">&#8597;</button>
+
+<div id="container">
+  <div id="map-wrapper">
+    <div id="map"></div>
+  </div>
+  
+  <div id="sidebar">
+
+    <div class="section">
+      <h3>النتيجة</h3>
+      <table>
+        <tr><td>اسم المصرف</td><td class="value" id="drainName">---</td></tr>
+        <tr><td>البعد الكيلومترى (حتى المصب)</td><td class="value" id="toEnd">---</td></tr>
+        <tr><td>البر (يمين / شمال)</td><td class="value" id="drainSide">---</td></tr>
+        <tr><td>المسافة إلى حرم المصرف</td><td class="value" id="harimDist">---</td></tr>
+        <tr><td>أقرب مسافة الى خط المصرف</td><td class="value" id="nearestDistance">---</td></tr>
+        <tr><td>المسافة من المبدأ</td><td class="value" id="fromStart">---</td></tr>
+        <tr><td>إجمالى طول المصرف</td><td class="value" id="totalLength">---</td></tr>
+      </table>
+      <div class="legend">
+        <span><i class="dot" style="background:#facc15"></i> نقطة الإدخال</span>
+        <span><i class="dot" style="background:#22c55e"></i> نقطة الإسقاط</span>
+        <span><i class="dot" style="background:#22c55e"></i> من المبدأ للإسقاط</span>
+        <span><i class="dot" style="background:#ef4444"></i> من الإسقاط للمصب</span>
+        <span><i class="dot" style="background:#e879f9"></i> البوليجون / خط المسافة للحرم</span>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>رفع ملف KML</h3>
+      <input type="file" id="kmlFile" accept=".kml">
+      <div id="status">لم يتم رفع أى ملف بعد</div>
+    </div>
+
+    <div class="section">
+      <h3>المصرف</h3>
+      <input type="text" id="drainSearch" placeholder="ابحث عن المصرف..." disabled>
+      <div id="drainDropdown" style="display:none;background:#0b1220;border:1px solid #334155;border-radius:6px;max-height:200px;overflow-y:auto;margin-top:6px;">
+      </div>
+      <div id="selectedDrainInfo" style="margin-top:8px;padding:8px;background:#172033;border-radius:6px;display:none;">
+        <div style="font-size:12px;color:#94a3b8;">المصرف المختار:</div>
+        <div id="selectedDrainName" style="font-size:14px;color:#22c55e;font-weight:bold;"></div>
+        <div style="font-size:11px;color:#64748b;margin-top:4px;">الطول: <span id="selectedDrainLength">---</span> كم</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>البعد من المصب (كيلومتر)</h3>
+      <input type="number" id="distanceFromEnd" placeholder="أدخل البعد من المصب..." disabled min="0" step="0.001">
+      <div id="distanceError" style="font-size:12px;color:#ef4444;margin-top:4px;display:none;"></div>
+      <button id="btnCalcFromDistance" disabled>تحديد الموقع</button>
+    </div>
+
+    <div class="section">
+      <h3>الإحداثيات (يمكن الضغط على الخريطة)</h3>
+      <input type="text" id="coordX" placeholder="X (خط الطول، مثال: 31.xxxxx)">
+      <input type="text" id="coordY" placeholder="Y (خط العرض، مثال: 29.xxxxx)">
+      <button id="btnCalc" disabled>حساب</button>
+      <button id="btnCopyLoc" style="background:#7c3aed;">نسخ اللوكيشن</button>
+      <input type="text" id="locInput" placeholder="الصق اللوكيشن هنا (مثال: 29.019439, 31.091518)">
+      <button id="btnApplyLoc" style="background:#0d9488;">تحديد من اللوكيشن</button>
+      <div id="locMsg" style="font-size:12px;color:#94a3b8;margin-top:6px;min-height:16px;"></div>
+    </div>
+
+
+  </div>
+</div>
+
+<script>
+const map = L.map("map").setView([29.3, 31.0], 8);
+
+const streetLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 22, maxNativeZoom: 19, attribution: "Esri World Street Map"
+});
+const satelliteLayer = L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}", {
+  maxZoom: 22, maxNativeZoom: 18, attribution: "Esri World Imagery"
+});
+satelliteLayer.addTo(map);
+let isSatellite = true;
+
+const toggleBtn = L.control({ position: "topright" });
+toggleBtn.onAdd = function () {
+  const btn = L.DomUtil.create("button", "");
+  btn.innerHTML = "عرض: خريطة عادية";
+  btn.style.cssText = "padding:8px 14px;background:#1e293b;color:#fff;border:1px solid #38bdf8;border-radius:8px;cursor:pointer;font-size:14px;font-family:Tahoma;";
+  btn.onclick = function () {
+    if (isSatellite) {
+      map.removeLayer(satelliteLayer); streetLayer.addTo(map);
+      btn.innerHTML = "عرض: صور جوية";
+    } else {
+      map.removeLayer(streetLayer); satelliteLayer.addTo(map);
+      btn.innerHTML = "عرض: خريطة عادية";
+    }
+    isSatellite = !isSatellite;
+  };
+  L.DomEvent.disableClickPropagation(btn);
+  return btn;
+};
+toggleBtn.addTo(map);
+
+//////////////////////////////////////////////////////
+// أداة القياس
+//////////////////////////////////////////////////////
+
+let measureMode = false;
+let measurePoints = [];
+let measureLayers = [];
+let measureMarkers = [];
+let measureTooltip = null;
+
+const measureBtn = L.control({ position: "topright" });
+measureBtn.onAdd = function () {
+  const btn = L.DomUtil.create("button", "");
+  btn.id = "measureBtn";
+  btn.innerHTML = "قياس مسافة";
+  btn.style.cssText = "padding:8px 14px;background:#1e293b;color:#fff;border:1px solid #f59e0b;border-radius:8px;cursor:pointer;font-size:14px;font-family:Tahoma;margin-top:6px;display:block;";
+  btn.onclick = function () {
+    if (measureMode) {
+      stopMeasure();
+      btn.innerHTML = "قياس مسافة";
+      btn.style.borderColor = "#f59e0b";
+    } else {
+      startMeasure();
+      btn.innerHTML = "إلغاء القياس";
+      btn.style.borderColor = "#ef4444";
+    }
+  };
+  L.DomEvent.disableClickPropagation(btn);
+  return btn;
+};
+measureBtn.addTo(map);
+
+function startMeasure() {
+  measureMode = true;
+  measurePoints = [];
+  clearMeasureLayers();
+  map.getContainer().style.cursor = "crosshair";
+  measureTooltip = L.popup({ closeButton: false, autoClose: false, closeOnClick: false })
+    .setLatLng(map.getCenter())
+    .setContent('<div style="font-family:Tahoma;font-size:13px;color:#111">اضغط على الخريطة لتحديد النقاط<br>انقر مرتين لإنهاء القياس</div>')
+    .openOn(map);
+}
+
+function stopMeasure() {
+  measureMode = false;
+  map.getContainer().style.cursor = "";
+  if (measureTooltip) { map.closePopup(measureTooltip); measureTooltip = null; }
+}
+
+function clearMeasureLayers() {
+  measureLayers.forEach(function (l) { map.removeLayer(l); });
+  measureMarkers.forEach(function (m) { map.removeLayer(m); });
+  measureLayers = [];
+  measureMarkers = [];
+}
+
+//////////////////////////////////////////////////////
+// زرار GPS
+//////////////////////////////////////////////////////
+
+const gpsBtn = L.control({ position: "topright" });
+gpsBtn.onAdd = function () {
+  const btn = L.DomUtil.create("button", "");
+  btn.id = "gpsBtn";
+  btn.innerHTML = "تحديد موقعي الحالي";
+  btn.style.cssText = "padding:8px 14px;background:#1e293b;color:#fff;border:1px solid #22c55e;border-radius:8px;cursor:pointer;font-size:14px;font-family:Tahoma;margin-top:6px;display:block;";
+  btn.onclick = function () {
+    if (!navigator.geolocation) { alert("جهازك لا يدعم GPS"); return; }
+    btn.innerHTML = "انتظار الـ GPS...";
+    navigator.geolocation.getCurrentPosition(
+      function (pos) {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        document.getElementById("coordX").value = lng.toFixed(6);
+        document.getElementById("coordY").value = lat.toFixed(6);
+        btn.innerHTML = "تحديد موقعي الحالي";
+
+        if (App.gpsMarker) { map.removeLayer(App.gpsMarker); App.gpsMarker = null; }
+        if (App.gpsAccuracy) { map.removeLayer(App.gpsAccuracy); App.gpsAccuracy = null; }
+
+        App.gpsMarker = L.circleMarker([lat, lng], {
+          radius: 10, color: "#22c55e", fillColor: "#22c55e",
+          fillOpacity: 0.9, weight: 3
+        }).addTo(map).bindPopup("موقعك الحالي").openPopup();
+
+        if (pos.coords.accuracy) {
+          App.gpsAccuracy = L.circle([lat, lng], {
+            radius: pos.coords.accuracy,
+            color: "#22c55e", fillColor: "#22c55e",
+            fillOpacity: 0.1, weight: 1
+          }).addTo(map);
+        }
+
+        map.setView([lat, lng], Math.max(map.getZoom(), 15));
+        if (hasData()) startCalculation();
+      },
+      function (err) {
+        btn.innerHTML = "تحديد موقعي الحالي";
+        alert("تعذر تحديد الموقع:\n" + err.message + "\n\nتأكد من تفعيل GPS وإذن الموقع للمتصفح");
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
+  L.DomEvent.disableClickPropagation(btn);
+  return btn;
+};
+gpsBtn.addTo(map);
+
+//////////////////////////////////////////////////////
+// زرار تحديد نقطة
+//////////////////////////////////////////////////////
+
+let pickMode = false;
+
+const pickBtn = L.control({ position: "topright" });
+pickBtn.onAdd = function () {
+  const btn = L.DomUtil.create("button", "");
+  btn.id = "pickBtn";
+  btn.innerHTML = "تحديد نقطة بالخريطة";
+  btn.style.cssText = "padding:8px 14px;background:#1e293b;color:#fff;border:1px solid #a855f7;border-radius:8px;cursor:pointer;font-size:14px;font-family:Tahoma;margin-top:6px;display:block;";
+  btn.onclick = function () {
+    if (pickMode) {
+      pickMode = false;
+      btn.innerHTML = "تحديد نقطة بالخريطة";
+      btn.style.borderColor = "#a855f7";
+      map.getContainer().style.cursor = "";
+    } else {
+      pickMode = true;
+      btn.innerHTML = "إلغاء التحديد";
+      btn.style.borderColor = "#ef4444";
+      map.getContainer().style.cursor = "crosshair";
+    }
+  };
+  L.DomEvent.disableClickPropagation(btn);
+  return btn;
+};
+pickBtn.addTo(map);
+
+//////////////////////////////////////////////////////
+// منطق تغيير مستويات حجم الخريطة الثلاثة
+//////////////////////////////////////////////////////
+let sizeState = 0; 
+document.getElementById("resizeMapBtn").addEventListener("click", function() {
+  const body = document.body;
+  if (sizeState === 0) {
+    body.classList.add("map-small"); body.classList.remove("map-fullscreen"); this.innerHTML = "&#8595;"; sizeState = 1;
+  } else if (sizeState === 1) {
+    body.classList.remove("map-small"); body.classList.add("map-fullscreen"); this.innerHTML = "&#8593;"; sizeState = 2;
+  } else {
+    body.classList.remove("map-small"); body.classList.remove("map-fullscreen"); this.innerHTML = "&#8597;"; sizeState = 0;
+  }
+  setTimeout(() => { map.invalidateSize(); }, 320);
+});
+
+//////////////////////////////////////////////////////
+// أحداث الخريطة
+//////////////////////////////////////////////////////
+
+map.on("click", function (e) {
+  if (measureMode) {
+    measurePoints.push(e.latlng);
+    const marker = L.circleMarker(e.latlng, {
+      radius: 5, color: "#f59e0b", fillColor: "#f59e0b", fillOpacity: 1
+    }).addTo(map);
+    measureMarkers.push(marker);
+    if (measurePoints.length >= 2) {
+      const line = L.polyline(measurePoints, { color: "#f59e0b", weight: 2, dashArray: "6,4" }).addTo(map);
+      measureLayers.push(line);
+      let total = 0;
+      for (let i = 0; i < measurePoints.length - 1; i++)
+        total += measurePoints[i].distanceTo(measurePoints[i + 1]);
+      if (measureTooltip) { map.closePopup(measureTooltip); }
+      measureTooltip = L.popup({ closeButton: false, autoClose: false, closeOnClick: false })
+        .setLatLng(e.latlng)
+        .setContent(
+          '<div style="font-family:Tahoma;font-size:13px;color:#111;line-height:1.8">' +
+          'المسافة: <b>' + total.toFixed(1) + ' متر</b><br>' +
+          '= ' + (total / 1000).toFixed(3) + ' كم<br>' +
+          '<span style="color:#555;font-size:11px">انقر مرتين للإنهاء</span></div>'
+        ).openOn(map);
+    }
+    return;
+  }
+
+  document.getElementById("coordX").value = e.latlng.lng.toFixed(6);
+  document.getElementById("coordY").value = e.latlng.lat.toFixed(6);
+
+  if (pickMode) {
+    pickMode = false;
+    document.getElementById("pickBtn").innerHTML = "تحديد نقطة بالخريطة";
+    document.getElementById("pickBtn").style.borderColor = "#a855f7";
+    map.getContainer().style.cursor = "";
+    if (hasData()) startCalculation();
+  }
+});
+
+map.on("dblclick", function (e) {
+  if (!measureMode) return;
+  L.DomEvent.stop(e);
+  stopMeasure();
+  document.getElementById("measureBtn").innerHTML = "قياس مسافة";
+  document.getElementById("measureBtn").style.borderColor = "#f59e0b";
+});
+
+//////////////////////////////////////////////////////
+// حالة التطبيق
+//////////////////////////////////////////////////////
+
+const App = {
+  drains: [], drainsLayer: null, selectedLayer: null,
+  inputMarker: null, snapMarker: null, perpLine: null,
+  beforeLayer: null, afterLayer: null,
+  gpsMarker: null, gpsAccuracy: null,
+  selectedDrain: null,
+  polygons: [], polygonsLayer: null, harimLine: null
+};
+
+const txtName    = document.getElementById("drainName");
+const txtNearest = document.getElementById("nearestDistance");
+const txtFrom    = document.getElementById("fromStart");
+const txtTo      = document.getElementById("toEnd");
+const txtTotal   = document.getElementById("totalLength");
+const txtSide    = document.getElementById("drainSide");
+const txtHarim   = document.getElementById("harimDist");
+const statusEl   = document.getElementById("status");
+const btnCalc    = document.getElementById("btnCalc");
+const drainSearch = document.getElementById("drainSearch");
+const drainDropdown = document.getElementById("drainDropdown");
+const selectedDrainInfo = document.getElementById("selectedDrainInfo");
+const distanceInput = document.getElementById("distanceFromEnd");
+const btnCalcFromDistance = document.getElementById("btnCalcFromDistance");
+const distanceError = document.getElementById("distanceError");
+
+//////////////////////////////////////////////////////
+// رفع KML
+//////////////////////////////////////////////////////
+
+document.getElementById("kmlFile").addEventListener("change", function (e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  clearGraphics(); resetResult();
+  btnCalc.disabled = true;
+  statusEl.textContent = "جارى تحميل الملف...";
+  const reader = new FileReader();
+  reader.onload = function (ev) {
+    try {
+      parseKmlText(ev.target.result);
+      if (hasData()) saveKmlToStorage(file.name, ev.target.result);
+    }
+    catch (err) { statusEl.textContent = "خطأ فى قراءة الملف: " + err.message; }
+  };
+  reader.readAsText(file, "utf-8");
+});
+
+//////////////////////////////////////////////////////
+// البوليجونات (نزع الملكية) وحساب المسافة للحرم
+//////////////////////////////////////////////////////
+
+// لو النقطة أقرب من كده (بالمتر) لحدود البوليجون تتعتبر على الحدود
+const BOUNDARY_TOLERANCE_M = 0.5;
+
+function hasData() {
+  return App.drains.length > 0 || App.polygons.length > 0;
+}
+
+function drawPolygonsLayer() {
+  if (App.polygons.length === 0) return;
+  App.polygonsLayer = L.geoJSON(turf.featureCollection(App.polygons.map(p => p.feature)), {
+    style: { color: "#e879f9", weight: 1.5, fillColor: "#e879f9", fillOpacity: 0.12 },
+    interactive: false
+  }).addTo(map);
+}
+
+// ملف حرم فقط (بدون خطوط مصارف): المسافة لخط المصرف = 0
+function calculatePolygonOnly(x, y) {
+  resetResult();
+  const r = computeHarim("", x, y);
+  if (!r) { alert("لم يتم العثور على بوليجون"); return; }
+  const name = r.poly.name;
+  App.selectedLayer = L.geoJSON(r.poly.feature, {
+    style: { color: "#ff9800", weight: 3, fill: false }, interactive: false
+  }).addTo(map);
+  App.inputMarker = L.circleMarker([y, x], {
+    radius: 7, color: "#facc15", fillColor: "#facc15", fillOpacity: 1
+  }).addTo(map).bindPopup("نقطة الإدخال");
+  txtName.innerHTML = name;
+  txtNearest.innerHTML = "0.00 متر";
+  updateHarim(name, x, y);
+}
+
+function normalizeName(n) {
+  return String(n).replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+function parseRingCoords(block) {
+  const m = block.match(/<coordinates>([\s\S]*?)<\/coordinates>/i);
+  if (!m) return null;
+  const pts = m[1].trim().split(/\s+/).map(function (c) {
+    const p = c.split(",");
+    return [parseFloat(p[0]), parseFloat(p[1])];
+  }).filter(function (p) { return !isNaN(p[0]) && !isNaN(p[1]); });
+  if (pts.length < 3) return null;
+  const f = pts[0], l = pts[pts.length - 1];
+  if (f[0] !== l[0] || f[1] !== l[1]) pts.push([f[0], f[1]]);
+  return pts.length >= 4 ? pts : null;
+}
+
+function computeHarim(drainName, lng, lat) {
+  if (!App.polygons.length) return null;
+  const key = normalizeName(drainName);
+  let cand = App.polygons.filter(function (p) { return p.key === key; });
+  if (!cand.length) cand = App.polygons;
+  const pt = turf.point([lng, lat]);
+  let best = null;
+  cand.forEach(function (p) {
+    let d = Infinity, near = null;
+    p.lines.forEach(function (line) {
+      const sn = turf.nearestPointOnLine(line, pt, { units: "kilometers" });
+      const dm = sn.properties.dist * 1000;
+      if (dm < d) { d = dm; near = sn.geometry.coordinates; }
+    });
+    const cur = { poly: p, dist: d, near: near, inside: turf.booleanPointInPolygon(pt, p.feature) };
+    if (!best || (cur.inside && !best.inside) || (cur.inside === best.inside && cur.dist < best.dist)) best = cur;
+  });
+  return best;
+}
+
+function updateHarim(drainName, lng, lat) {
+  txtHarim.style.color = "";
+  if (App.harimLine) { map.removeLayer(App.harimLine); App.harimLine = null; }
+  let r = null;
+  try { r = computeHarim(drainName, lng, lat); }
+  catch (err) { txtHarim.innerHTML = "تعذر حساب المسافة"; return; }
+  if (!r) { txtHarim.innerHTML = "لا توجد بوليجونات بالملف"; return; }
+  if (r.dist <= BOUNDARY_TOLERANCE_M) {
+    txtHarim.innerHTML = "على حدود نزع الملكية";
+    txtHarim.style.color = "#ef4444";
+    return;
+  }
+  const d = r.dist.toFixed(2) + " متر";
+  if (r.inside) {
+    txtHarim.innerHTML = "داخل نزع الملكية بـ " + d;
+    txtHarim.style.color = "#f59e0b";
+  } else {
+    txtHarim.innerHTML = d;
+  }
+  App.harimLine = L.polyline([[lat, lng], [r.near[1], r.near[0]]], {
+    color: "#e879f9", weight: 2, dashArray: "4,6"
+  }).addTo(map);
+}
+
+function parseKmlText(content) {
+  App.drains = [];
+  App.polygons = [];
+  if (App.drainsLayer) { map.removeLayer(App.drainsLayer); App.drainsLayer = null; }
+  if (App.polygonsLayer) { map.removeLayer(App.polygonsLayer); App.polygonsLayer = null; }
+
+  const placemarks = content.match(/<Placemark[\s\S]*?<\/Placemark>/gi) || [];
+  placemarks.forEach(function (placemark) {
+    if (/<Polygon/i.test(placemark)) {
+      const pNameMatch = placemark.match(/<name>([\s\S]*?)<\/name>/i);
+      const pName = pNameMatch ? pNameMatch[1].trim() : "بدون اسم";
+      (placemark.match(/<Polygon[\s\S]*?<\/Polygon>/gi) || []).forEach(function (pb) {
+        const outerM = pb.match(/<outerBoundaryIs>[\s\S]*?<\/outerBoundaryIs>/i);
+        if (!outerM) return;
+        const outer = parseRingCoords(outerM[0]);
+        if (!outer) return;
+        const rings = [outer];
+        (pb.match(/<innerBoundaryIs>[\s\S]*?<\/innerBoundaryIs>/gi) || []).forEach(function (ib) {
+          const r = parseRingCoords(ib);
+          if (r) rings.push(r);
+        });
+        try {
+          App.polygons.push({
+            name: pName, key: normalizeName(pName), rings: rings,
+            lines: rings.map(function (r) { return turf.lineString(r); }),
+            feature: turf.polygon(rings, { name: pName })
+          });
+        } catch (err) { /* بوليجون غير صالح يتم تجاهله */ }
+      });
+    }
+    if (!placemark.includes("LineString")) return;
+    const nameMatch = placemark.match(/<name>([\s\S]*?)<\/name>/i);
+    const name = nameMatch ? nameMatch[1].trim() : "بدون اسم";
+    const lineStrings = placemark.match(/<LineString[\s\S]*?<\/LineString>/gi) || [];
+    lineStrings.forEach(function (ls) {
+      const coordsMatch = ls.match(/<coordinates>([\s\S]*?)<\/coordinates>/i);
+      if (!coordsMatch) return;
+      const coords = coordsMatch[1].trim().split(/\s+/).map(function (c) {
+        const parts = c.split(",");
+        return [parseFloat(parts[0]), parseFloat(parts[1])];
+      }).filter(function (p) { return !isNaN(p[0]) && !isNaN(p[1]); });
+      if (coords.length >= 2) {
+        coords.reverse();
+        App.drains.push({ name: name, feature: turf.lineString(coords, { name: name }) });
+      }
+    });
+  });
+
+  if (App.drains.length === 0 && App.polygons.length === 0) {
+    statusEl.textContent = "لم يتم العثور على أى خطوط مصارف أو بوليجونات فى الملف"; return;
+  }
+  if (App.drains.length === 0) {
+    // ملف حرم فقط
+    App.selectedDrain = null;
+    if (App.selectedLayer) { map.removeLayer(App.selectedLayer); App.selectedLayer = null; }
+    drainSearch.value = ""; drainSearch.disabled = true;
+    drainDropdown.innerHTML = ""; drainDropdown.style.display = "none";
+    selectedDrainInfo.style.display = "none";
+    distanceInput.value = ""; distanceInput.disabled = true;
+    btnCalcFromDistance.disabled = true;
+    drawPolygonsLayer();
+    map.fitBounds(App.polygonsLayer.getBounds());
+    statusEl.textContent = "تم تحميل " + App.polygons.length + " بوليجون (ملف حرم فقط، بدون خطوط مصارف)";
+    btnCalc.disabled = false;
+    return;
+  }
+  drawPolygonsLayer();
+  const fc = turf.featureCollection(App.drains.map(d => d.feature));
+  App.drainsLayer = L.geoJSON(fc, {
+    style: { color: "#00bcd4", weight: 2, opacity: 0.7 },
+    onEachFeature: function (feature, layer) { layer.bindPopup(feature.properties.name); }
+  }).addTo(map);
+  map.fitBounds(App.drainsLayer.getBounds());
+  statusEl.textContent = "تم تحميل " + App.drains.length + " خط مصرف" + (App.polygons.length ? " و " + App.polygons.length + " بوليجون" : "") + " بنجاح";
+  btnCalc.disabled = false;
+  drainSearch.disabled = false;
+  populateDrainDropdown();
+}
+
+//////////////////////////////////////////////////////
+// دروب ليست المصارف
+//////////////////////////////////////////////////////
+
+function populateDrainDropdown() {
+  drainDropdown.innerHTML = '';
+  App.drains.forEach((drain, index) => {
+    const div = document.createElement('div');
+    div.className = 'drain-item';
+    div.textContent = drain.name;
+    div.addEventListener('click', () => selectDrain(index));
+    drainDropdown.appendChild(div);
+  });
+}
+
+drainSearch.addEventListener('input', function() {
+  const query = this.value.toLowerCase().trim();
+  const items = drainDropdown.querySelectorAll('.drain-item');
+  let visibleCount = 0;
+  
+  items.forEach((item) => {
+    const text = item.textContent.toLowerCase();
+    if (text.includes(query)) {
+      item.style.display = '';
+      visibleCount++;
+    } else {
+      item.style.display = 'none';
+    }
+  });
+  
+  drainDropdown.style.display = visibleCount > 0 ? 'block' : 'none';
+});
+
+drainSearch.addEventListener('focus', function() {
+  if (App.drains.length > 0) {
+    drainDropdown.style.display = 'block';
+  }
+});
+
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#drainSearch') && !e.target.closest('#drainDropdown')) {
+    drainDropdown.style.display = 'none';
+  }
+});
+
+function selectDrain(index) {
+  App.selectedDrain = App.drains[index];
+  drainSearch.value = App.selectedDrain.name;
+  drainDropdown.style.display = 'none';
+  
+  // إظهار معلومات المصرف المختار
+  const drainLength = turf.length(App.selectedDrain.feature, { units: "kilometers" });
+  document.getElementById("selectedDrainName").textContent = App.selectedDrain.name;
+  document.getElementById("selectedDrainLength").textContent = drainLength.toFixed(3);
+  selectedDrainInfo.style.display = 'block';
+  
+  // تفعيل حقل البعد من المصب
+  distanceInput.disabled = false;
+  distanceInput.value = '';
+  distanceError.style.display = 'none';
+  btnCalcFromDistance.disabled = false;
+  
+  // زوم على المصرف
+  clearGraphics(); 
+  resetResult();
+  const bounds = turf.bbox(App.selectedDrain.feature);
+  map.fitBounds([[bounds[1], bounds[0]], [bounds[3], bounds[2]]], { padding: 50 });
+  
+  // تعليم المصرف
+  if (App.selectedLayer) map.removeLayer(App.selectedLayer);
+  App.selectedLayer = L.geoJSON(App.selectedDrain.feature, { 
+    style: { color: "#ff9800", weight: 5 } 
+  }).addTo(map);
+}
+
+//////////////////////////////////////////////////////
+// حساب من البعد الكيلومترى
+//////////////////////////////////////////////////////
+
+btnCalcFromDistance.addEventListener('click', calculateFromDistance);
+distanceInput.addEventListener('keypress', function(e) {
+  if (e.key === 'Enter') calculateFromDistance();
+});
+
+function calculateFromDistance() {
+  if (!App.selectedDrain) {
+    alert('من فضلك اختر مصرف أولاً');
+    return;
+  }
+  
+  const toEnd = parseFloat(distanceInput.value);
+  if (isNaN(toEnd) || toEnd < 0) {
+    showDistanceError('من فضلك أدخل بعداً صحيحاً');
+    return;
+  }
+  
+  const drainLength = turf.length(App.selectedDrain.feature, { units: "kilometers" });
+  
+  if (toEnd > drainLength) {
+    showDistanceError(`البعد أكبر من طول المصرف (${drainLength.toFixed(3)} كم)`);
+    return;
+  }
+  
+  distanceError.style.display = 'none';
+  clearGraphics();
+  resetResult();
+  
+  // حساب fromStart من toEnd
+  const fromStart = drainLength - toEnd;
+  
+  // الحصول على النقطة على المصرف
+  const point = turf.along(App.selectedDrain.feature, fromStart, { units: "kilometers" });
+  const coords = point.geometry.coordinates;
+  
+  // عرض الإحداثيات
+  document.getElementById("coordX").value = coords[0].toFixed(6);
+  document.getElementById("coordY").value = coords[1].toFixed(6);
+  
+  // رسم النقطة والمعلومات
+  App.inputMarker = L.circleMarker(
+    [coords[1], coords[0]],
+    { radius: 7, color: "#22c55e", fillColor: "#22c55e", fillOpacity: 1 }
+  ).addTo(map).bindPopup("الموقع المحدد").openPopup();
+  
+  // عرض النتائج
+  txtName.innerHTML = App.selectedDrain.name;
+  txtNearest.innerHTML = "0.00 متر";
+  txtFrom.innerHTML = fromStart.toFixed(3) + " كم";
+  txtTo.innerHTML = toEnd.toFixed(3) + " كم";
+  txtTotal.innerHTML = drainLength.toFixed(3) + " كم";
+  txtSide.innerHTML = "على الخط";
+  
+  // رسم الأجزاء
+  drawDrainPartsByDistance(App.selectedDrain.feature, coords, fromStart);
+  updateHarim(App.selectedDrain.name, coords[0], coords[1]);
+  
+  // زوم على النقطة
+  map.setView([coords[1], coords[0]], Math.max(map.getZoom(), 15));
+}
+
+function showDistanceError(message) {
+  distanceError.textContent = message;
+  distanceError.style.display = 'block';
+}
+
+//////////////////////////////////////////////////////
+// الحساب من الإحداثيات
+//////////////////////////////////////////////////////
+
+btnCalc.addEventListener("click", startCalculation);
+document.addEventListener("keydown", function (e) { if (e.key === "Enter") startCalculation(); });
+
+function startCalculation() {
+  if (!hasData()) { alert("قم برفع ملف KML أولاً"); return; }
+  const x = parseFloat(document.getElementById("coordX").value);
+  const y = parseFloat(document.getElementById("coordY").value);
+  if (isNaN(x) || isNaN(y)) { alert("من فضلك أدخل إحداثيات صحيحة"); return; }
+  clearGraphics();
+  if (App.drains.length === 0) { calculatePolygonOnly(x, y); return; }
+  const inputPoint = turf.point([x, y]);
+  let bestDrain = null, bestSnap = null, bestDistance = Infinity;
+  App.drains.forEach(function (drain) {
+    const snapped = turf.nearestPointOnLine(drain.feature, inputPoint, { units: "kilometers" });
+    if (snapped.properties.dist < bestDistance) {
+      bestDistance = snapped.properties.dist; bestDrain = drain; bestSnap = snapped;
+    }
+  });
+  if (!bestDrain) { alert("لم يتم العثور على مصرف مناسب"); return; }
+  App.selected = { drain: bestDrain, snap: bestSnap, input: inputPoint };
+  drawSelection();
+  calculateChainage();
+  updateHarim(bestDrain.name, x, y);
+}
+
+function clearGraphics() {
+  ["selectedLayer","inputMarker","snapMarker","perpLine","beforeLayer","afterLayer","harimLine"].forEach(function (key) {
+    if (App[key]) { map.removeLayer(App[key]); App[key] = null; }
+  });
+  if (App.gpsMarker) { map.removeLayer(App.gpsMarker); App.gpsMarker = null; }
+  if (App.gpsAccuracy) { map.removeLayer(App.gpsAccuracy); App.gpsAccuracy = null; }
+}
+
+function drawSelection() {
+  const drain = App.selected.drain, snap = App.selected.snap, input = App.selected.input;
+  App.selectedLayer = L.geoJSON(drain.feature, { style: { color: "#ff9800", weight: 5 } }).addTo(map);
+  App.inputMarker = L.circleMarker(
+    [input.geometry.coordinates[1], input.geometry.coordinates[0]],
+    { radius: 7, color: "#facc15", fillColor: "#facc15", fillOpacity: 1 }
+  ).addTo(map).bindPopup("نقطة الإدخال");
+  App.snapMarker = L.circleMarker(
+    [snap.geometry.coordinates[1], snap.geometry.coordinates[0]],
+    { radius: 6, color: "#22c55e", fillColor: "#22c55e", fillOpacity: 1 }
+  ).addTo(map).bindPopup("نقطة الإسقاط");
+  App.perpLine = L.polyline([
+    [input.geometry.coordinates[1], input.geometry.coordinates[0]],
+    [snap.geometry.coordinates[1], snap.geometry.coordinates[0]]
+  ], { color: "#facc15", weight: 2, dashArray: "8,8" }).addTo(map);
+  txtName.innerHTML = drain.name;
+  txtNearest.innerHTML = (snap.properties.dist * 1000).toFixed(2) + " متر";
+}
+
+function calculateChainage() {
+  const drain = App.selected.drain, snap = App.selected.snap;
+  const coords = drain.feature.geometry.coordinates;
+  const total = turf.length(drain.feature, { units: "kilometers" });
+  let fromStart = snap.properties.location;
+  if (fromStart === undefined || fromStart === null) {
+    let si = snap.properties.index !== undefined ? snap.properties.index : 0;
+    if (si < 0) si = 0;
+    if (si >= coords.length - 1) si = coords.length - 2;
+    fromStart = 0;
+    for (let i = 0; i < si; i++)
+      fromStart += turf.distance(turf.point(coords[i]), turf.point(coords[i+1]), { units: "kilometers" });
+    fromStart += turf.distance(turf.point(coords[si]), turf.point(snap.geometry.coordinates), { units: "kilometers" });
+  }
+  const toEnd = total - fromStart;
+  txtFrom.innerHTML = fromStart.toFixed(3) + " كم";
+  txtTo.innerHTML = toEnd.toFixed(3) + " كم";
+  txtTotal.innerHTML = total.toFixed(3) + " كم";
+  txtSide.innerHTML = calculateSide(drain.feature, total, fromStart, snap, App.selected.input);
+  drawDrainParts(coords, snap.geometry.coordinates, fromStart);
+}
+
+function calculateSide(line, total, fromStart, snap, inputPoint) {
+  const delta = 0.02;
+  let d1 = Math.max(fromStart - delta, 0);
+  let d2 = Math.min(fromStart + delta, total);
+  if (d2 - d1 < 0.005) { d1 = 0; d2 = total; }
+  const ptBefore = turf.along(line, d1, { units: "kilometers" });
+  const ptAfter  = turf.along(line, d2, { units: "kilometers" });
+  const dirBearing = turf.bearing(ptBefore, ptAfter);
+  const toBearing  = turf.bearing(turf.point(snap.geometry.coordinates), inputPoint);
+  let diff = toBearing - dirBearing;
+  diff = ((diff + 180) % 360 + 360) % 360 - 180;
+  if (Math.abs(diff) < 1) return "النقطة على الخط تقريباً";
+  return diff > 0 ? "الضفة اليمنى (أيمن)" : "الضفة اليسرى (أيسر)";
+}
+
+function drawDrainParts(coords, snapCoord, fromStartKm) {
+  let before = [[coords[0][1], coords[0][0]]];
+  let accumulated = 0, inserted = false;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const segLen = turf.distance(turf.point(coords[i]), turf.point(coords[i+1]), { units: "kilometers" });
+    if (!inserted && accumulated + segLen >= fromStartKm) {
+      before.push([snapCoord[1], snapCoord[0]]); inserted = true;
+    } else { before.push([coords[i+1][1], coords[i+1][0]]); }
+    accumulated += segLen;
+  }
+  if (!inserted) before.push([snapCoord[1], snapCoord[0]]);
+
+  let after = [[snapCoord[1], snapCoord[0]]];
+  accumulated = 0; let started = false;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const segLen = turf.distance(turf.point(coords[i]), turf.point(coords[i+1]), { units: "kilometers" });
+    if (!started && accumulated + segLen >= fromStartKm) { started = true; after.push([coords[i+1][1], coords[i+1][0]]); }
+    else if (started) after.push([coords[i+1][1], coords[i+1][0]]);
+    accumulated += segLen;
+  }
+
+  App.beforeLayer = L.polyline(before, { color: "#22c55e", weight: 6 }).addTo(map);
+  App.afterLayer  = L.polyline(after,  { color: "#ef4444", weight: 6 }).addTo(map);
+  map.panTo([App.selected.snap.geometry.coordinates[1], App.selected.snap.geometry.coordinates[0]]);
+}
+
+function drawDrainPartsByDistance(line, snapCoord, fromStartKm) {
+  const coords = line.geometry.coordinates;
+  let before = [[coords[0][1], coords[0][0]]];
+  let accumulated = 0, inserted = false;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const segLen = turf.distance(turf.point(coords[i]), turf.point(coords[i+1]), { units: "kilometers" });
+    if (!inserted && accumulated + segLen >= fromStartKm) {
+      before.push([snapCoord[1], snapCoord[0]]); inserted = true;
+    } else { before.push([coords[i+1][1], coords[i+1][0]]); }
+    accumulated += segLen;
+  }
+  if (!inserted) before.push([snapCoord[1], snapCoord[0]]);
+
+  let after = [[snapCoord[1], snapCoord[0]]];
+  accumulated = 0; let started = false;
+  for (let i = 0; i < coords.length - 1; i++) {
+    const segLen = turf.distance(turf.point(coords[i]), turf.point(coords[i+1]), { units: "kilometers" });
+    if (!started && accumulated + segLen >= fromStartKm) { started = true; after.push([coords[i+1][1], coords[i+1][0]]); }
+    else if (started) after.push([coords[i+1][1], coords[i+1][0]]);
+    accumulated += segLen;
+  }
+
+  App.beforeLayer = L.polyline(before, { color: "#22c55e", weight: 6 }).addTo(map);
+  App.afterLayer  = L.polyline(after,  { color: "#ef4444", weight: 6 }).addTo(map);
+}
+
+function resetResult() {
+  txtName.innerHTML = txtNearest.innerHTML = txtFrom.innerHTML =
+  txtTo.innerHTML = txtTotal.innerHTML = txtSide.innerHTML = "---";
+  txtHarim.innerHTML = "---";
+  txtHarim.style.color = "";
+}
+
+//////////////////////////////////////////////////////
+// نسخ / إدخال اللوكيشن (خط العرض, خط الطول)
+//////////////////////////////////////////////////////
+
+const locInput = document.getElementById("locInput");
+const locMsg = document.getElementById("locMsg");
+
+function showLocMsg(text, isError) {
+  locMsg.textContent = text;
+  locMsg.style.color = isError ? "#ef4444" : "#22c55e";
+}
+
+document.getElementById("btnCopyLoc").addEventListener("click", function () {
+  const x = parseFloat(document.getElementById("coordX").value);
+  const y = parseFloat(document.getElementById("coordY").value);
+  if (isNaN(x) || isNaN(y)) { showLocMsg("مفيش نقطة محددة لنسخها", true); return; }
+  const text = y + ", " + x;
+  function done() { showLocMsg("تم نسخ اللوكيشن: " + text, false); }
+  function fallback() {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); }
+    catch (err) { showLocMsg("تعذر النسخ، انسخ يدوياً: " + text, true); }
+    document.body.removeChild(ta);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+});
+
+function applyLocation() {
+  const nums = locInput.value.match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length < 2) { showLocMsg("اللوكيشن غير صحيح، اكتبه بالشكل: 29.019439, 31.091518", true); return; }
+  let lat = parseFloat(nums[0]);
+  let lng = parseFloat(nums[1]);
+  if (Math.abs(lat) > 90 && Math.abs(lng) <= 90) { const t = lat; lat = lng; lng = t; }
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) { showLocMsg("اللوكيشن خارج النطاق الصحيح", true); return; }
+  document.getElementById("coordX").value = lng.toFixed(6);
+  document.getElementById("coordY").value = lat.toFixed(6);
+  showLocMsg("تم إدخال اللوكيشن", false);
+  map.setView([lat, lng], Math.max(map.getZoom(), 15));
+  if (hasData()) {
+    startCalculation();
+  } else {
+    clearGraphics();
+    App.inputMarker = L.circleMarker([lat, lng], {
+      radius: 7, color: "#facc15", fillColor: "#facc15", fillOpacity: 1
+    }).addTo(map).bindPopup("نقطة الإدخال");
+  }
+}
+
+document.getElementById("btnApplyLoc").addEventListener("click", applyLocation);
+locInput.addEventListener("keydown", function (e) {
+  if (e.key === "Enter") { e.stopPropagation(); applyLocation(); }
+});
+locInput.addEventListener("paste", function () { setTimeout(applyLocation, 50); });
+
+//////////////////////////////////////////////////////
+// حفظ ملف KML فى ذاكرة الجهاز (IndexedDB) لحد ما يتم اختيار ملف تانى
+//////////////////////////////////////////////////////
+
+function openKmlDb() {
+  return new Promise(function (resolve, reject) {
+    const req = indexedDB.open("drain-calc-db", 1);
+    req.onupgradeneeded = function () { req.result.createObjectStore("kv"); };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
+
+function saveKmlToStorage(name, content) {
+  openKmlDb().then(function (db) {
+    const tx = db.transaction("kv", "readwrite");
+    tx.objectStore("kv").put({ name: name, content: content }, "kml");
+    tx.oncomplete = function () {
+      statusEl.textContent += " - تم حفظ الملف: " + name;
+      db.close();
+    };
+    tx.onerror = function () {
+      statusEl.textContent += " - تعذر حفظ الملف على الجهاز";
+      db.close();
+    };
+  }).catch(function () {
+    statusEl.textContent += " - تعذر حفظ الملف على الجهاز";
+  });
+}
+
+function restoreSavedKml() {
+  if (!window.indexedDB) return;
+  openKmlDb().then(function (db) {
+    const req = db.transaction("kv", "readonly").objectStore("kv").get("kml");
+    req.onsuccess = function () {
+      const saved = req.result;
+      db.close();
+      if (!saved || !saved.content) return;
+      try {
+        parseKmlText(saved.content);
+        if (hasData()) statusEl.textContent += " - الملف المحفوظ: " + saved.name;
+      } catch (err) {
+        statusEl.textContent = "تعذر قراءة الملف المحفوظ: " + err.message;
+      }
+    };
+    req.onerror = function () { db.close(); };
+  }).catch(function () {});
+}
+
+if (navigator.storage && navigator.storage.persist) { navigator.storage.persist(); }
+restoreSavedKml();
+
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(function (reg) { console.log('Service Worker مسجل بنجاح'); reg.update(); })
+      .catch(function (err) { console.log('فشل تسجيل Service Worker:', err); });
+  });
+}
+</script>
+</body>
+</html>
